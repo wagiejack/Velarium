@@ -36,10 +36,12 @@ id_of_current_line:u128=0
 Line_Data::struct{
     line_start:struct{x:f32,y:f32},
     line_end:struct{x:f32,y:f32},
-    thickness:u32
+    thickness:u32,
+    color:u32
 }
 Fill_Data::struct{
     initialization_point:struct{x:f32, y:f32},
+    color_to_be_replaced_with:u32,
     color_to_be_replaced:u32
 }
 Drawing_Type::enum{
@@ -52,7 +54,6 @@ Line::struct{
         Fill_Data
     },
     drawing_type:Drawing_Type,
-    color:u32,
     line_id:u128
 }
 Stack::struct(T:typeid){
@@ -96,14 +97,18 @@ draw_line_from_stack::proc(stack:^Stack(Line)){
         switch d.drawing_type{
             case .LINE:{
                 line_data:=d.data.(Line_Data)
-                color:=d.color
+                color:=d.data.(Line_Data).color
                 thickness:=line_data.thickness
                 x_start,y_start:=line_data.line_start.x,line_data.line_start.y
                 x_end,y_end:=line_data.line_end.x,line_data.line_end.y
                 draw_line(i32(x_start),i32(y_start),i32(x_end),i32(y_end),color)
             }
             case .FILL:{
-
+                fill_data:=d.data.(Fill_Data)
+                fill_color:=fill_data.color_to_be_replaced_with
+                existing_color_that_will_be_replaced:=fill_data.color_to_be_replaced
+                x,y:=fill_data.initialization_point.x,fill_data.initialization_point.y
+                fill_area(x,y,fill_color,existing_color_that_will_be_replaced)
             }
         }
     }
@@ -163,18 +168,27 @@ perform_empty_check_and_swap_lines_among_stacks::proc(to:^Stack(Line),from:^Stac
         swap_stack_elements_with_same_line_ids(to,from,line_id_to_be_removed)
     }
 }
-catch_perimeter_points_of_the_area_to_be_filled::proc(x:f32,y:f32,color:u32,existing_color_to_be_replaced:u32){
-    if x>0 && y>0 && x<WINDOW_WIDTH && y<WINDOW_HEIGHT && drawing_buffer[WINDOW_WIDTH * int(y) + int(x)]!=color && drawing_buffer[WINDOW_WIDTH * int(y) + int(x)]==existing_color_to_be_replaced{
-        draw_pixel(i32(x),i32(y),color)
-        catch_perimeter_points_of_the_area_to_be_filled(x+1,y,color,existing_color_to_be_replaced)
-        catch_perimeter_points_of_the_area_to_be_filled(x+1,y+1,color,existing_color_to_be_replaced)
-        catch_perimeter_points_of_the_area_to_be_filled(x,y+1,color,existing_color_to_be_replaced)
-        catch_perimeter_points_of_the_area_to_be_filled(x-1,y,color,existing_color_to_be_replaced)
-        catch_perimeter_points_of_the_area_to_be_filled(x-1,y-1,color,existing_color_to_be_replaced)
-        catch_perimeter_points_of_the_area_to_be_filled(x,y-1,color,existing_color_to_be_replaced)
-        catch_perimeter_points_of_the_area_to_be_filled(x+1,y-1,color,existing_color_to_be_replaced)
-        catch_perimeter_points_of_the_area_to_be_filled(x-1,y+1,color,existing_color_to_be_replaced)
+fill_area::proc(x:f32,y:f32,new_color:u32,target_color:u32){
+    // Check bounds
+    if x < 0 || y < 0 || x >= WINDOW_WIDTH || y >= WINDOW_HEIGHT {
+        return
     }
+    current_color := drawing_buffer[WINDOW_WIDTH * int(y) + int(x)]
+    // If current pixel is not the color we want to replace, return
+    if current_color != target_color {
+        return
+    }  
+    // If we've already filled this pixel with the new color, return
+    if current_color == new_color {
+        return
+    }
+    // Fill current pixel
+    draw_pixel(i32(x), i32(y), new_color)
+    // Recursively fill neighbors
+    fill_area(x+1, y, new_color, target_color)    // right
+    fill_area(x-1, y, new_color, target_color)    // left
+    fill_area(x, y+1, new_color, target_color)    // down
+    fill_area(x, y-1, new_color, target_color)    // up
 }
 
 check_input :: proc(){
@@ -198,17 +212,23 @@ check_input :: proc(){
                     case .R:
                         perform_empty_check_and_swap_lines_among_stacks(&Line_Stack,&Undo_Stack)
                     case .F:
-                        // mouse_event := cast(^sdl.MouseMotionEvent)&event
-                        // current_mouse_pos := vec2_t{f32(mouse_event.x), f32(mouse_event.y)}
-                        // log_info("Caught mouse motion at",current_mouse_pos.x,current_mouse_pos.y)
-                        // color_to_be_filled:u32 = 0xFF00FF00
-                        // existing_pixel_color_to_be_replaced:u32 = drawing_buffer[WINDOW_WIDTH * int(current_mouse_pos.y) + int(current_mouse_pos.x)] //We will be replacing pixel color that the mouse is at
-                        // Current_Filled_Area:Filled_Area
-                        // Current_Filled_Area.color_filled_with = color_to_be_filled
-                        // Current_Filled_Area.perimeter_points=make([dynamic]vec2_t)
-                        // catch_perimeter_points_of_the_area_to_be_filled(current_mouse_pos.x,current_mouse_pos.y,color_to_be_filled,existing_pixel_color_to_be_replaced,&Current_Filled_Area)
-                        // //putting these perimeter points onto Filled_Area Stack which we will populate while drawing the buffer
-                        // stack_push(&Filled_Area_Stack,Current_Filled_Area)
+                        x, y: i32
+                        sdl.GetMouseState(&x, &y)
+                        current_mouse_pos := vec2_t{f32(x), f32(y)}
+                        new_fill_color:u32 = 0xFFFF0000
+                        existing_color:u32 = drawing_buffer[WINDOW_WIDTH * int(current_mouse_pos.y) + int(current_mouse_pos.x)] //We will be replacing pixel color that the mouse is at
+                        //putting this point in the Line stack
+                        stack_push(&Line_Stack,
+                        Line{
+                                Fill_Data{
+                                    initialization_point = {current_mouse_pos.x,current_mouse_pos.y},
+                                    color_to_be_replaced_with = new_fill_color,
+                                    color_to_be_replaced = existing_color
+                                },
+                                Drawing_Type.FILL,//be mindful of this
+                                id_of_current_line
+                            }
+                        )
                 }
             case .KEYUP:
                 key_event := cast(^sdl.KeyboardEvent)&event
@@ -235,9 +255,9 @@ check_input :: proc(){
                             line_start = {prev_mouse_pos.x, prev_mouse_pos.y},
                             line_end = {current_mouse_pos.x, current_mouse_pos.y},
                             thickness = 2,
+                            color = 0xFF0000FF
                         },
                         Drawing_Type.LINE,
-                        0xFF0000FF,
                         id_of_current_line//TODO:2 must be replaced with thickness when thickness fucntionality is implemented
                     }
                     )
