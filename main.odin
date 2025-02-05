@@ -33,11 +33,26 @@ vec3_t :: struct{
     z:f32
 }
 id_of_current_line:u128=0
-Line::struct{
+Line_Data::struct{
     line_start:struct{x:f32,y:f32},
     line_end:struct{x:f32,y:f32},
+    thickness:u32
+}
+Fill_Data::struct{
+    initialization_point:struct{x:f32, y:f32},
+    color_to_be_replaced:u32
+}
+Drawing_Type::enum{
+    LINE,
+    FILL
+}
+Line::struct{
+    data:union{
+        Line_Data,
+        Fill_Data
+    },
+    drawing_type:Drawing_Type,
     color:u32,
-    thickness:u32,
     line_id:u128
 }
 Stack::struct(T:typeid){
@@ -78,14 +93,21 @@ Undo_Stack : Stack(Line)
 draw_line_from_stack::proc(stack:^Stack(Line)){
     for i in 0..<len(stack.data){
         d:=stack.data[i]
-        color:=d.color
-        thickness:=d.thickness
-        x_start,y_start:=d.line_start.x,d.line_start.y
-        x_end,y_end:=d.line_end.x,d.line_end.y
-        draw_line(i32(x_start),i32(y_start),i32(x_end),i32(y_end),color)
+        switch d.drawing_type{
+            case .LINE:{
+                line_data:=d.data.(Line_Data)
+                color:=d.color
+                thickness:=line_data.thickness
+                x_start,y_start:=line_data.line_start.x,line_data.line_start.y
+                x_end,y_end:=line_data.line_end.x,line_data.line_end.y
+                draw_line(i32(x_start),i32(y_start),i32(x_end),i32(y_end),color)
+            }
+            case .FILL:{
+
+            }
+        }
     }
 }
-
 fov_factor:f32 = 128
 N_POINTS::9*9*9
 //array of 3-d projected points
@@ -111,6 +133,50 @@ log :: proc(level:log_types,args:..any){
     fmt.println(..args)
 }
 
+swap_stack_elements_and_return_lineId::proc(to:^Stack(Line),from:^Stack(Line))->(line_id:u128,is_swapped:bool){
+    if len(from.data)>0{
+        value_popped, is_popped:=stack_pop(from)
+        log_info("Value popped from stack")
+        if is_popped{
+            stack_push(to,value_popped)
+            line_id = value_popped.line_id
+            is_swapped = true
+        }
+    }
+    return
+}
+swap_stack_elements_with_same_line_ids::proc(to:^Stack(Line),from:^Stack(Line),line_id_to_swap:u128){
+    if len(from.data)>0{
+        removed_line_id, is_swapped := swap_stack_elements_and_return_lineId(to,from)
+        for{
+            value,is_line_present:=stack_peek(from)
+            if is_line_present==false || value.line_id!=removed_line_id {break}
+            else {swap_stack_elements_and_return_lineId(to,from)}
+        }
+    }
+}
+perform_empty_check_and_swap_lines_among_stacks::proc(to:^Stack(Line),from:^Stack(Line)){
+    if len(from.data)>0{//empty check
+        //swapping lines amongst stack
+        top_line_value,_:=stack_peek(from)
+        line_id_to_be_removed:=top_line_value.line_id
+        swap_stack_elements_with_same_line_ids(to,from,line_id_to_be_removed)
+    }
+}
+catch_perimeter_points_of_the_area_to_be_filled::proc(x:f32,y:f32,color:u32,existing_color_to_be_replaced:u32){
+    if x>0 && y>0 && x<WINDOW_WIDTH && y<WINDOW_HEIGHT && drawing_buffer[WINDOW_WIDTH * int(y) + int(x)]!=color && drawing_buffer[WINDOW_WIDTH * int(y) + int(x)]==existing_color_to_be_replaced{
+        draw_pixel(i32(x),i32(y),color)
+        catch_perimeter_points_of_the_area_to_be_filled(x+1,y,color,existing_color_to_be_replaced)
+        catch_perimeter_points_of_the_area_to_be_filled(x+1,y+1,color,existing_color_to_be_replaced)
+        catch_perimeter_points_of_the_area_to_be_filled(x,y+1,color,existing_color_to_be_replaced)
+        catch_perimeter_points_of_the_area_to_be_filled(x-1,y,color,existing_color_to_be_replaced)
+        catch_perimeter_points_of_the_area_to_be_filled(x-1,y-1,color,existing_color_to_be_replaced)
+        catch_perimeter_points_of_the_area_to_be_filled(x,y-1,color,existing_color_to_be_replaced)
+        catch_perimeter_points_of_the_area_to_be_filled(x+1,y-1,color,existing_color_to_be_replaced)
+        catch_perimeter_points_of_the_area_to_be_filled(x-1,y+1,color,existing_color_to_be_replaced)
+    }
+}
+
 check_input :: proc(){
     log_info("Checking the input")
     event: sdl.Event
@@ -128,19 +194,28 @@ check_input :: proc(){
                         is_drawing = true
                         log_info("Drawing started (d pressed)")
                     case .U:
-                        value,is_line_present:=stack_pop(&Line_Stack)
-                        removed_line_id:=value.line_id
-                        for{
-                            value,is_line_present:=stack_peek(&Line_Stack)
-                            if is_line_present==false || value.line_id!=removed_line_id {break}
-                            else {value,is_line_present = stack_pop(&Line_Stack)}
-                        }
+                        perform_empty_check_and_swap_lines_among_stacks(&Undo_Stack,&Line_Stack)
+                    case .R:
+                        perform_empty_check_and_swap_lines_among_stacks(&Line_Stack,&Undo_Stack)
+                    case .F:
+                        // mouse_event := cast(^sdl.MouseMotionEvent)&event
+                        // current_mouse_pos := vec2_t{f32(mouse_event.x), f32(mouse_event.y)}
+                        // log_info("Caught mouse motion at",current_mouse_pos.x,current_mouse_pos.y)
+                        // color_to_be_filled:u32 = 0xFF00FF00
+                        // existing_pixel_color_to_be_replaced:u32 = drawing_buffer[WINDOW_WIDTH * int(current_mouse_pos.y) + int(current_mouse_pos.x)] //We will be replacing pixel color that the mouse is at
+                        // Current_Filled_Area:Filled_Area
+                        // Current_Filled_Area.color_filled_with = color_to_be_filled
+                        // Current_Filled_Area.perimeter_points=make([dynamic]vec2_t)
+                        // catch_perimeter_points_of_the_area_to_be_filled(current_mouse_pos.x,current_mouse_pos.y,color_to_be_filled,existing_pixel_color_to_be_replaced,&Current_Filled_Area)
+                        // //putting these perimeter points onto Filled_Area Stack which we will populate while drawing the buffer
+                        // stack_push(&Filled_Area_Stack,Current_Filled_Area)
                 }
             case .KEYUP:
                 key_event := cast(^sdl.KeyboardEvent)&event
                 #partial switch key_event.keysym.scancode {
                     case .D:
                         id_of_current_line+=1 //at this point a new line begins
+                        log_info(`New line begins, incrementing current line id to`,id_of_current_line)
                         is_d_pressed = false
                         is_drawing = false
                         prev_mouse_pos = {-1, -1}  // Reset the previous mouse position
@@ -154,11 +229,17 @@ check_input :: proc(){
                         prev_mouse_pos = current_mouse_pos
                     }
                     // In check_input's MOUSEMOTION case:
-                    stack_push(&Line_Stack,Line{
-                        {prev_mouse_pos.x, prev_mouse_pos.y},
-                        {current_mouse_pos.x, current_mouse_pos.y},
+                    stack_push(&Line_Stack,
+                    Line{
+                        Line_Data{
+                            line_start = {prev_mouse_pos.x, prev_mouse_pos.y},
+                            line_end = {current_mouse_pos.x, current_mouse_pos.y},
+                            thickness = 2,
+                        },
+                        Drawing_Type.LINE,
                         0xFF0000FF,
-                        2,id_of_current_line}//TODO:2 must be replaced with thickness when thickness fucntionality is implemented
+                        id_of_current_line//TODO:2 must be replaced with thickness when thickness fucntionality is implemented
+                    }
                     )
                 }
                 prev_mouse_pos = current_mouse_pos
@@ -177,7 +258,6 @@ clear_color_buffer :: proc(color:u32){
 
 //Bresenham's line algorithm for connecting two points
 draw_line :: proc(x0, y0, x1, y1: i32, color: u32) {
-    // Create local copies of x0 and y0
     x := x0
     y := y0
 
@@ -290,9 +370,10 @@ render_color_buffer :: proc(){
 
 render_window :: proc() {
     clear_color_buffer(0xFF000000)  // Clear temporary buffer
-    draw_grid()                     // Draw grid ON TOP of existing drawing
+    //both drawing line and filling area is done on the drawing_buffer
     draw_line_from_stack(&Line_Stack)
     render_color_buffer()           // Copy drawing buffer to color buffer
+    draw_grid()                     // Draw grid ON TOP of existing drawing
     // Update texture with COMBINED content (drawing + grid)
     sdl.UpdateTexture(color_buffer_texture, nil, &color_buffer, size_of(u32)*WINDOW_WIDTH)
     sdl.RenderCopy(renderer, color_buffer_texture, nil, nil)
