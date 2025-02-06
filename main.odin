@@ -168,27 +168,33 @@ perform_empty_check_and_swap_lines_among_stacks::proc(to:^Stack(Line),from:^Stac
         swap_stack_elements_with_same_line_ids(to,from,line_id_to_be_removed)
     }
 }
-fill_area::proc(x:f32,y:f32,new_color:u32,target_color:u32){
-    // Check bounds
-    if x < 0 || y < 0 || x >= WINDOW_WIDTH || y >= WINDOW_HEIGHT {
+fill_area :: proc(start_x: f32, start_y: f32, new_color: u32, target_color: u32) {
+    if start_x < 0 || start_y < 0 || start_x >= WINDOW_WIDTH || start_y >= WINDOW_HEIGHT {
         return
     }
-    current_color := drawing_buffer[WINDOW_WIDTH * int(y) + int(x)]
-    // If current pixel is not the color we want to replace, return
-    if current_color != target_color {
-        return
-    }  
-    // If we've already filled this pixel with the new color, return
-    if current_color == new_color {
-        return
+    points_to_process := make([dynamic]vec2_t)
+    defer delete(points_to_process)
+    append(&points_to_process, vec2_t{start_x, start_y})
+    for len(points_to_process) > 0 {
+        current := points_to_process[len(points_to_process)-1]
+        pop(&points_to_process)
+        x, y := current.x, current.y
+        if x < 0 || y < 0 || x >= WINDOW_WIDTH || y >= WINDOW_HEIGHT {
+            continue
+        }
+        current_color := drawing_buffer[WINDOW_WIDTH * int(y) + int(x)]
+        if current_color != target_color || current_color == new_color {
+            continue
+        }
+        // Fill current pixel
+        draw_pixel(i32(x), i32(y), new_color)
+
+        // Add neighboring pixels to stack
+        append(&points_to_process, vec2_t{x + 1, y}) // right
+        append(&points_to_process, vec2_t{x - 1, y}) // left
+        append(&points_to_process, vec2_t{x, y + 1}) // down
+        append(&points_to_process, vec2_t{x, y - 1}) // up
     }
-    // Fill current pixel
-    draw_pixel(i32(x), i32(y), new_color)
-    // Recursively fill neighbors
-    fill_area(x+1, y, new_color, target_color)    // right
-    fill_area(x-1, y, new_color, target_color)    // left
-    fill_area(x, y+1, new_color, target_color)    // down
-    fill_area(x, y-1, new_color, target_color)    // up
 }
 
 check_input :: proc(){
