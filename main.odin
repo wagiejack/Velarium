@@ -1,6 +1,7 @@
 package main
 import "core:fmt"
 import "core:time"
+import "core:math"
 import sdl "vendor:sdl2"
 
 log_types::enum{
@@ -11,6 +12,20 @@ log_types::enum{
 WINDOW_WIDTH :: 800
 WINDOW_HEIGHT :: 600
 is_drawing:bool =false
+is_drawing_rectangle:bool=false
+initial_rectangle_point:vec2_t = vec2_t{-1,-1}
+is_drawing_circle:bool= false
+initial_circle_point:vec2_t = vec2_t{-1,-1}
+is_drawing_ellipse:bool=false
+inital_ellipse_point:vec2_t = vec2_t{-1,-1}
+is_drawing_triangle:bool = false
+initial_triangle_point:vec2_t = vec2_t{-1,-1}
+is_drawing_line:bool=false
+initial_line_point:vec2_t = vec2_t{-1,-1}
+
+reset_shape_point::proc(shape:^vec2_t){
+    shape.x,shape.y = -1,-1
+}
 
 is_window_running:bool = false
 renderer:^sdl.Renderer = nil
@@ -19,6 +34,7 @@ color_buffer:[WINDOW_HEIGHT][WINDOW_WIDTH]u32
 color_buffer_texture: ^sdl.Texture = nil
 drawing_buffer:[]u32
 is_d_pressed:bool = false
+is_r_pressed:bool = false
 
 //storing the previous mouse position to draw the line from the previous point to new mouse point for continious line
 prev_mouse_pos: vec2_t = {-1,-1}
@@ -39,6 +55,10 @@ Line_Data::struct{
     thickness:u32,
     color:u32
 }
+rectangle_shape_data::struct{
+    initialization_point:vec2_t,
+    final_point:vec2_t
+}
 Fill_Data::struct{
     initialization_point:struct{x:f32, y:f32},
     color_to_be_replaced_with:u32,
@@ -46,12 +66,14 @@ Fill_Data::struct{
 }
 Drawing_Type::enum{
     LINE,
-    FILL
+    FILL,
+    RECTANGLE_SHAPE
 }
 Line::struct{
     data:union{
         Line_Data,
-        Fill_Data
+        Fill_Data,
+        rectangle_shape_data
     },
     drawing_type:Drawing_Type,
     line_id:u128
@@ -109,6 +131,26 @@ draw_line_from_stack::proc(stack:^Stack(Line)){
                 existing_color_that_will_be_replaced:=fill_data.color_to_be_replaced
                 x,y:=fill_data.initialization_point.x,fill_data.initialization_point.y
                 fill_area(x,y,fill_color,existing_color_that_will_be_replaced)
+            }
+            case .RECTANGLE_SHAPE:{
+                data:= d.data.(rectangle_shape_data)
+                x_initial,y_initial:=data.initialization_point.x,data.initialization_point.y
+                x_final,y_final:=data.final_point.x,data.final_point.y
+                length:= math.abs(x_initial-x_final)
+                height:=math.abs(y_initial-y_final)
+                //two points of rectangle
+                predicted_point_1_x,predicted_point_1_y:=x_initial,y_final
+                predicted_point_2_x,predicted_point_2_y:=x_final,y_initial
+                //to make not too verbose code
+                initial:=vec2_t{x_initial,y_initial}
+                final:=vec2_t{x_final,y_final}
+                pp1:=vec2_t{predicted_point_1_x,predicted_point_1_y}
+                pp2:=vec2_t{predicted_point_2_x,predicted_point_2_y}
+                color:u32=0x00FF00FF
+                draw_line(i32(initial.x),i32(initial.y),i32(pp1.x),i32(pp1.y),color)
+                draw_line(i32(initial.x),i32(initial.y),i32(pp2.x),i32(pp2.y),color)
+                draw_line(i32(final.x),i32(final.y),i32(pp1.x),i32(pp1.y),color)
+                draw_line(i32(final.x),i32(final.y),i32(pp2.x),i32(pp2.y),color)
             }
         }
     }
@@ -216,6 +258,21 @@ check_input :: proc(){
                     case .U:
                         perform_empty_check_and_swap_lines_among_stacks(&Undo_Stack,&Line_Stack)
                     case .R:
+                        is_r_pressed = true
+                        //d+r triggers rectangle drawing
+                        if is_d_pressed && !is_drawing_rectangle{
+                            x, y: i32
+                            sdl.GetMouseState(&x, &y)
+                            current_mouse_pos := vec2_t{f32(x), f32(y)}
+                            is_drawing_rectangle = true
+                            initial_rectangle_point=vec2_t{current_mouse_pos.x,current_mouse_pos.y}
+                            id_of_current_line+=1
+                            continue
+                        }
+                        //blocking the usual action of restoration since we are drawing shape
+                        if is_drawing_rectangle{
+                            continue
+                        }
                         perform_empty_check_and_swap_lines_among_stacks(&Line_Stack,&Undo_Stack)
                     case .F:
                         x, y: i32
@@ -246,10 +303,40 @@ check_input :: proc(){
                         is_drawing = false
                         prev_mouse_pos = {-1, -1}  // Reset the previous mouse position
                         log_info("Drawing stopped (d released)")
+                    case .R:
+                        is_r_pressed = false
+                        //this will mess with redo, must happen only when d+r is lifted up
+                        if is_drawing_rectangle {
+                            is_drawing_rectangle = false
+                            reset_shape_point(&initial_rectangle_point)
+                            id_of_current_line+=1
+                        }
                 }
             case .MOUSEMOTION:
                 mouse_event := cast(^sdl.MouseMotionEvent)&event
                 current_mouse_pos := vec2_t{f32(mouse_event.x), f32(mouse_event.y)}
+                if is_d_pressed && is_drawing_rectangle{
+                    //Are we already in process of drawing a rectangle?
+                    //I want to constantly render the rectangle as we move the mouse
+                    for{
+                        top_value,ok:=stack_peek(&Line_Stack)
+                        if ok && top_value.drawing_type==Drawing_Type.RECTANGLE_SHAPE && top_value.line_id==id_of_current_line{
+                            stack_pop(&Line_Stack)
+                        }else{
+                            break
+                        }
+                    }
+                    stack_push(&Line_Stack,Line{
+                        rectangle_shape_data{
+                            initialization_point = vec2_t{initial_rectangle_point.x,initial_rectangle_point.y},
+                            final_point = vec2_t{current_mouse_pos.x,current_mouse_pos.y}
+                        },
+                        Drawing_Type.RECTANGLE_SHAPE,
+                        id_of_current_line
+                    })
+                    prev_mouse_pos = current_mouse_pos
+                    continue
+                }
                 if is_drawing{
                     if prev_mouse_pos=={-1,-1}{
                         prev_mouse_pos = current_mouse_pos
