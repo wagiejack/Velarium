@@ -26,6 +26,36 @@ initial_line_point:vec2_t = vec2_t{-1,-1}
 reset_shape_point::proc(shape:^vec2_t){
     shape.x,shape.y = -1,-1
 }
+distance_between_points::proc(p1:vec2_t,p2:vec2_t)->(distance:f32){
+    dx := math.abs(p1.x-p2.x)
+    dy := math.abs(p1.y-p2.y)
+    return math.sqrt(dx*dx + dy*dy)
+}
+draw_circle :: proc(center: vec2_t, radius: f32, color: u32) {//copied from llm
+    x := i32(radius)
+    y : i32 = 0
+    p : i32 = 1 - i32(radius) // Initial decision parameter
+    // Draw the circle using symmetry
+    for x >= y {
+        // Plot points in all octants
+        draw_fat_pixel(i32(center.x) + x, i32(center.y) + y, color)
+        draw_fat_pixel(i32(center.x) + y, i32(center.y) + x, color)
+        draw_fat_pixel(i32(center.x) - y, i32(center.y) + x, color)
+        draw_fat_pixel(i32(center.x) - x, i32(center.y) + y, color)
+        draw_fat_pixel(i32(center.x) - x, i32(center.y) - y, color)
+        draw_fat_pixel(i32(center.x) - y, i32(center.y) - x, color)
+        draw_fat_pixel(i32(center.x) + y, i32(center.y) - x, color)
+        draw_fat_pixel(i32(center.x) + x, i32(center.y) - y, color)
+        y += 1
+        // Update decision parameter
+        if p <= 0 {
+            p = p + 2 * y + 1
+        } else {
+            x -= 1
+            p = p + 2 * y - 2 * x + 1
+        }
+    }
+}
 
 is_window_running:bool = false
 renderer:^sdl.Renderer = nil
@@ -35,6 +65,7 @@ color_buffer_texture: ^sdl.Texture = nil
 drawing_buffer:[]u32
 is_d_pressed:bool = false
 is_r_pressed:bool = false
+is_c_pressed:bool = false
 
 //storing the previous mouse position to draw the line from the previous point to new mouse point for continious line
 prev_mouse_pos: vec2_t = {-1,-1}
@@ -59,6 +90,10 @@ rectangle_shape_data::struct{
     initialization_point:vec2_t,
     final_point:vec2_t
 }
+circle_shape_data::struct{
+    initialization_point:vec2_t,
+    final_point:vec2_t
+}
 Fill_Data::struct{
     initialization_point:struct{x:f32, y:f32},
     color_to_be_replaced_with:u32,
@@ -67,13 +102,15 @@ Fill_Data::struct{
 Drawing_Type::enum{
     LINE,
     FILL,
-    RECTANGLE_SHAPE
+    RECTANGLE_SHAPE,
+    CIRCLE_SHAPE
 }
 Line::struct{
     data:union{
         Line_Data,
         Fill_Data,
-        rectangle_shape_data
+        rectangle_shape_data,
+        circle_shape_data
     },
     drawing_type:Drawing_Type,
     line_id:u128
@@ -151,6 +188,16 @@ draw_line_from_stack::proc(stack:^Stack(Line)){
                 draw_line(i32(initial.x),i32(initial.y),i32(pp2.x),i32(pp2.y),color)
                 draw_line(i32(final.x),i32(final.y),i32(pp1.x),i32(pp1.y),color)
                 draw_line(i32(final.x),i32(final.y),i32(pp2.x),i32(pp2.y),color)
+            }
+            case .CIRCLE_SHAPE:{
+                data:=d.data.(circle_shape_data)
+                initial:=vec2_t{data.initialization_point.x,data.initialization_point.y}
+                final:=vec2_t{data.final_point.x,data.final_point.y}
+                diameter:=distance_between_points(initial,final)
+                radius:=diameter/2
+                center:=vec2_t{(initial.x+final.x)/2,(initial.y+final.y)/2}
+                color: u32 = 0x00FF00FF
+                draw_circle(center,radius,color)
             }
         }
     }
@@ -257,6 +304,19 @@ check_input :: proc(){
                         log_info("Drawing started (d pressed)")
                     case .U:
                         perform_empty_check_and_swap_lines_among_stacks(&Undo_Stack,&Line_Stack)
+                    case .C:{
+                        is_c_pressed = true
+                        if is_d_pressed && !is_drawing_circle{
+                            //d+c triggers circle
+                            x, y: i32
+                            sdl.GetMouseState(&x, &y)
+                            current_mouse_pos := vec2_t{f32(x), f32(y)}
+                            is_drawing_circle = true
+                            initial_circle_point = vec2_t{current_mouse_pos.x,current_mouse_pos.y}
+                            id_of_current_line+=1
+                            continue
+                        }
+                    }
                     case .R:
                         is_r_pressed = true
                         //d+r triggers rectangle drawing
@@ -303,6 +363,13 @@ check_input :: proc(){
                         is_drawing = false
                         prev_mouse_pos = {-1, -1}  // Reset the previous mouse position
                         log_info("Drawing stopped (d released)")
+                    case .C:
+                        is_c_pressed = false
+                        if is_drawing_circle {
+                            is_drawing_circle = false
+                            reset_shape_point(&initial_circle_point)
+                            id_of_current_line+=1
+                        }
                     case .R:
                         is_r_pressed = false
                         //this will mess with redo, must happen only when d+r is lifted up
@@ -315,6 +382,27 @@ check_input :: proc(){
             case .MOUSEMOTION:
                 mouse_event := cast(^sdl.MouseMotionEvent)&event
                 current_mouse_pos := vec2_t{f32(mouse_event.x), f32(mouse_event.y)}
+                if is_d_pressed && is_drawing_circle{
+                    //copying the algo from rectangle
+                    for{
+                        top_value,ok:=stack_peek(&Line_Stack)
+                        if ok && top_value.drawing_type==Drawing_Type.CIRCLE_SHAPE && top_value.line_id==id_of_current_line{
+                            stack_pop(&Line_Stack)
+                        }else{
+                            break
+                        }
+                    }
+                    stack_push(&Line_Stack,Line{
+                        circle_shape_data{
+                            initialization_point = vec2_t{initial_circle_point.x,initial_circle_point.y},
+                            final_point = vec2_t{current_mouse_pos.x,current_mouse_pos.y}
+                        },
+                        Drawing_Type.CIRCLE_SHAPE,
+                        id_of_current_line
+                    })
+                    prev_mouse_pos = current_mouse_pos
+                    continue
+                }
                 if is_d_pressed && is_drawing_rectangle{
                     //Are we already in process of drawing a rectangle?
                     //I want to constantly render the rectangle as we move the mouse
