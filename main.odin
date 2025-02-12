@@ -9,6 +9,7 @@ log_types::enum{
     WARN,
     ERROR
 }
+RED:u32=0xFF0000FF
 WINDOW_WIDTH :: 800
 WINDOW_HEIGHT :: 600
 is_drawing:bool =false
@@ -17,11 +18,14 @@ initial_rectangle_point:vec2_t = vec2_t{-1,-1}
 is_drawing_circle:bool= false
 initial_circle_point:vec2_t = vec2_t{-1,-1}
 is_drawing_ellipse:bool=false
-inital_ellipse_point:vec2_t = vec2_t{-1,-1}
+initial_ellipse_point:vec2_t = vec2_t{-1,-1}
 is_drawing_triangle:bool = false
 initial_triangle_point:vec2_t = vec2_t{-1,-1}
-is_drawing_line:bool=false
-initial_line_point:vec2_t = vec2_t{-1,-1}
+is_drawing_line_shape:bool=false
+initial_line_shape_point:vec2_t = vec2_t{-1,-1}
+is_x_pressed:bool= false
+template_color:u32=0xFF000000
+
 
 reset_shape_point::proc(shape:^vec2_t){
     shape.x,shape.y = -1,-1
@@ -30,6 +34,60 @@ distance_between_points::proc(p1:vec2_t,p2:vec2_t)->(distance:f32){
     dx := math.abs(p1.x-p2.x)
     dy := math.abs(p1.y-p2.y)
     return math.sqrt(dx*dx + dy*dy)
+}
+draw_ellipse :: proc(center_x, center_y, radius_x, radius_y: f32, color: u32) {
+    rx := i32(radius_x)
+    ry := i32(radius_y)
+    cx := i32(center_x)
+    cy := i32(center_y)
+
+    x :i32= 0
+    y :i32= ry
+    dx :i32= 0
+    dy :i32= 2 * rx * rx * y
+    err := ry * ry - rx * rx * ry
+    for rx * rx * y >= ry * ry * x {
+        draw_fat_pixel(cx + x, cy + y, color)
+        draw_fat_pixel(cx - x, cy + y, color)
+        draw_fat_pixel(cx + x, cy - y, color)
+        draw_fat_pixel(cx - x, cy - y, color)
+
+        if err <= 0 {
+            x += 1
+            dx += 2 * ry * ry
+            err += dx + ry * ry
+        } else {
+            y -= 1
+            dy -= 2 * rx * rx
+            err += rx * rx - dy
+        }
+    }
+    // Second region; y decreasing, x increasing
+    x = rx
+    y = 0
+    dx = 2 * ry * ry * x
+    dy = 0
+    err = ry * ry - rx * rx * rx
+    for ry * ry * x >= rx * rx * y {
+        draw_fat_pixel(cx + x, cy + y, color)
+        draw_fat_pixel(cx - x, cy + y, color)
+        draw_fat_pixel(cx + x, cy - y, color)
+        draw_fat_pixel(cx - x, cy - y, color)
+        if err <= 0 {
+            y += 1
+            dy += 2 * rx * rx
+            err += dy + rx * rx
+        } else {
+            x -= 1
+            dx -= 2 * ry * ry
+            err += ry * ry - dx
+        }
+    }
+}
+draw_triangle :: proc(p1, p2, p3: vec2_t, color: u32) {
+    draw_line(i32(p1.x), i32(p1.y), i32(p2.x), i32(p2.y), color)
+    draw_line(i32(p2.x), i32(p2.y), i32(p3.x), i32(p3.y), color)
+    draw_line(i32(p3.x), i32(p3.y), i32(p1.x), i32(p1.y), color)
 }
 draw_circle :: proc(center: vec2_t, radius: f32, color: u32) {//copied from llm
     x := i32(radius)
@@ -66,6 +124,9 @@ drawing_buffer:[]u32
 is_d_pressed:bool = false
 is_r_pressed:bool = false
 is_c_pressed:bool = false
+is_t_pressed:bool = false
+is_e_pressed:bool = false
+is_l_pressed:bool = false
 
 //storing the previous mouse position to draw the line from the previous point to new mouse point for continious line
 prev_mouse_pos: vec2_t = {-1,-1}
@@ -78,6 +139,14 @@ vec3_t :: struct{
     x:f32,
     y:f32,
     z:f32
+}
+pixel_data::struct{
+    x:f32,
+    y:f32,
+    color:u32
+}
+reset_pixel_to_default_template::proc(pixel:^pixel_data){
+    draw_pixel(i32(pixel.x),i32(pixel.y),template_color)
 }
 id_of_current_line:u128=0
 Line_Data::struct{
@@ -94,6 +163,18 @@ circle_shape_data::struct{
     initialization_point:vec2_t,
     final_point:vec2_t
 }
+ellipse_shape_data::struct{
+    initialization_point:vec2_t,
+    final_point:vec2_t
+}
+triangle_shape_data::struct{
+    initialization_point:vec2_t,
+    final_point:vec2_t,
+}
+line_shape_data::struct{
+    initialization_point:vec2_t,
+    final_point:vec2_t,
+}
 Fill_Data::struct{
     initialization_point:struct{x:f32, y:f32},
     color_to_be_replaced_with:u32,
@@ -103,14 +184,20 @@ Drawing_Type::enum{
     LINE,
     FILL,
     RECTANGLE_SHAPE,
-    CIRCLE_SHAPE
+    CIRCLE_SHAPE,
+    ELLIPSE_SHAPE,
+    TRIANGLE_SHAPE,
+    LINE_SHAPE
 }
 Line::struct{
     data:union{
         Line_Data,
         Fill_Data,
         rectangle_shape_data,
-        circle_shape_data
+        circle_shape_data,
+        ellipse_shape_data,
+        triangle_shape_data,
+        line_shape_data
     },
     drawing_type:Drawing_Type,
     line_id:u128
@@ -198,6 +285,45 @@ draw_line_from_stack::proc(stack:^Stack(Line)){
                 center:=vec2_t{(initial.x+final.x)/2,(initial.y+final.y)/2}
                 color: u32 = 0x00FF00FF
                 draw_circle(center,radius,color)
+            }
+            case .ELLIPSE_SHAPE:{
+                data:=d.data.(ellipse_shape_data)
+                initial:=vec2_t{data.initialization_point.x,data.initialization_point.y}
+                final:=vec2_t{data.final_point.x,data.final_point.y}
+                radius_x:=distance_between_points(initial,vec2_t{final.x,initial.y})/2 //Horizontal radius
+                radius_y:=distance_between_points(initial,vec2_t{initial.x,final.y})/2 //Vertical radius
+                center:=vec2_t{(initial.x+final.x)/2,(initial.y+final.y)/2}
+                color: u32 = 0x00FF00FF
+            
+                min_radius: f32 = 5 // Minimum radius
+                if radius_x < min_radius {
+                    radius_x = min_radius
+                }
+                if radius_y < min_radius {
+                    radius_y = min_radius
+                }
+                draw_ellipse(center.x,center.y,radius_x,radius_y,color)
+            }
+            case .TRIANGLE_SHAPE:{
+                data:=d.data.(triangle_shape_data)
+                p1:=vec2_t{data.initialization_point.x,data.initialization_point.y}
+                p_mid:=vec2_t{data.final_point.x,data.final_point.y}
+                color: u32 = 0x00FF00FF
+            
+                height := math.abs(p1.y - p_mid.y)
+                base_half_width := height
+            
+                p2 := vec2_t{p_mid.x - base_half_width, p_mid.y}
+                p3 := vec2_t{p_mid.x + base_half_width, p_mid.y}
+            
+                draw_triangle(p1, p2, p3, color)
+            }
+            case .LINE_SHAPE:{
+                data:=d.data.(line_shape_data)
+                initial:=vec2_t{data.initialization_point.x,data.initialization_point.y}
+                final:=vec2_t{data.final_point.x,data.final_point.y}
+                color: u32 = 0x00FF00FF
+                draw_line(i32(initial.x),i32(initial.y),i32(final.x),i32(final.y),color)
             }
         }
     }
@@ -352,6 +478,45 @@ check_input :: proc(){
                                 id_of_current_line
                             }
                         )
+                    case .L:{
+                        is_l_pressed = true
+                        if is_d_pressed && !is_drawing_line_shape{
+                            //d+l triggers line drawing
+                            x, y: i32
+                            sdl.GetMouseState(&x, &y)
+                            current_mouse_pos := vec2_t{f32(x), f32(y)}
+                            is_drawing_line_shape = true
+                            initial_line_shape_point = vec2_t{current_mouse_pos.x,current_mouse_pos.y}
+                            id_of_current_line+=1
+                            continue
+                        }
+                    }
+                    case .T:{
+                        is_t_pressed = true
+                        if is_d_pressed && !is_drawing_triangle{
+                            //d+t triggers triangle drawing
+                            x, y: i32
+                            sdl.GetMouseState(&x, &y)
+                            current_mouse_pos := vec2_t{f32(x), f32(y)}
+                            is_drawing_triangle = true
+                            initial_triangle_point = vec2_t{current_mouse_pos.x,current_mouse_pos.y}
+                            id_of_current_line+=1
+                            continue
+                        }
+                    }
+                    case .E:{
+                        is_e_pressed = true
+                        if is_d_pressed && !is_drawing_ellipse{
+                            //d+e triggers ellipse drawing
+                            x, y: i32
+                            sdl.GetMouseState(&x, &y)
+                            current_mouse_pos := vec2_t{f32(x), f32(y)}
+                            is_drawing_ellipse = true
+                            initial_ellipse_point = vec2_t{current_mouse_pos.x,current_mouse_pos.y}
+                            id_of_current_line+=1
+                            continue
+                        }
+                    }
                 }
             case .KEYUP:
                 key_event := cast(^sdl.KeyboardEvent)&event
@@ -376,6 +541,27 @@ check_input :: proc(){
                         if is_drawing_rectangle {
                             is_drawing_rectangle = false
                             reset_shape_point(&initial_rectangle_point)
+                            id_of_current_line+=1
+                        }
+                    case .L:
+                        is_l_pressed = false
+                        if is_drawing_line_shape {
+                            is_drawing_line_shape = false
+                            reset_shape_point(&initial_line_shape_point)
+                            id_of_current_line+=1
+                        }
+                    case .T:
+                        is_t_pressed = false
+                        if is_drawing_triangle {
+                            is_drawing_triangle = false
+                            reset_shape_point(&initial_triangle_point)
+                            id_of_current_line+=1
+                        }
+                    case .E:
+                        is_e_pressed = false
+                        if is_drawing_ellipse {
+                            is_drawing_ellipse = false
+                            reset_shape_point(&initial_ellipse_point)
                             id_of_current_line+=1
                         }
                 }
@@ -420,6 +606,66 @@ check_input :: proc(){
                             final_point = vec2_t{current_mouse_pos.x,current_mouse_pos.y}
                         },
                         Drawing_Type.RECTANGLE_SHAPE,
+                        id_of_current_line
+                    })
+                    prev_mouse_pos = current_mouse_pos
+                    continue
+                }
+                if is_d_pressed && is_drawing_ellipse{
+                    for{
+                        top_value,ok:=stack_peek(&Line_Stack)
+                        if ok && top_value.drawing_type==Drawing_Type.ELLIPSE_SHAPE && top_value.line_id==id_of_current_line{
+                            stack_pop(&Line_Stack)
+                        }else{
+                            break
+                        }
+                    }
+                    stack_push(&Line_Stack,Line{
+                        ellipse_shape_data{
+                            initialization_point = vec2_t{initial_ellipse_point.x,initial_ellipse_point.y},
+                            final_point = vec2_t{current_mouse_pos.x,current_mouse_pos.y}
+                        },
+                        Drawing_Type.ELLIPSE_SHAPE,
+                        id_of_current_line
+                    })
+                    prev_mouse_pos = current_mouse_pos
+                    continue
+                }
+                if is_d_pressed && is_drawing_triangle{
+                    for{
+                        top_value,ok:=stack_peek(&Line_Stack)
+                        if ok && top_value.drawing_type==Drawing_Type.TRIANGLE_SHAPE && top_value.line_id==id_of_current_line{
+                            stack_pop(&Line_Stack)
+                        }else{
+                            break
+                        }
+                    }
+                    stack_push(&Line_Stack,Line{
+                        triangle_shape_data{
+                            initialization_point = vec2_t{initial_triangle_point.x,initial_triangle_point.y},
+                            final_point = vec2_t{current_mouse_pos.x,current_mouse_pos.y}
+                        },
+                        Drawing_Type.TRIANGLE_SHAPE,
+                        id_of_current_line
+                    })
+                    prev_mouse_pos = current_mouse_pos
+                    continue
+                }
+                if is_d_pressed && is_drawing_line_shape{
+                    for{
+                        top_value,ok:=stack_peek(&Line_Stack)
+                        if ok && top_value.drawing_type==Drawing_Type.LINE_SHAPE && top_value.line_id==id_of_current_line{
+                            stack_pop(&Line_Stack)
+                        }else{
+                            break
+                        }
+                    }
+                    stack_push(&Line_Stack,Line{
+                        line_shape_data{
+                            initialization_point = vec2_t{initial_line_shape_point.x,initial_line_shape_point.y},
+                            final_point = vec2_t{current_mouse_pos.x,current_mouse_pos.y}
+                        },
+                        Drawing_Type.LINE_SHAPE,
                         id_of_current_line
                     })
                     prev_mouse_pos = current_mouse_pos
@@ -570,12 +816,10 @@ render_color_buffer :: proc(){
 }
 
 render_window :: proc() {
-    clear_color_buffer(0xFF000000)  // Clear temporary buffer
-    //both drawing line and filling area is done on the drawing_buffer
-    draw_line_from_stack(&Line_Stack)
-    render_color_buffer()           // Copy drawing buffer to color buffer
-    draw_grid()                     // Draw grid ON TOP of existing drawing
-    // Update texture with COMBINED content (drawing + grid)
+    clear_color_buffer(0xFF000000)
+    draw_line_from_stack(&Line_Stack)    
+    render_color_buffer()
+    draw_grid()
     sdl.UpdateTexture(color_buffer_texture, nil, &color_buffer, size_of(u32)*WINDOW_WIDTH)
     sdl.RenderCopy(renderer, color_buffer_texture, nil, nil)
     sdl.RenderPresent(renderer)
@@ -619,7 +863,7 @@ main :: proc(){
     log_info("Starting the application")
     is_window_running = initialize_window()
     stack_init(&Line_Stack)
-    stack_init(&Undo_Stack)
+    stack_init(&Undo_Stack)  
     defer stack_free(&Line_Stack)
     defer stack_free(&Undo_Stack)
     defer sdl.DestroyRenderer(renderer)
