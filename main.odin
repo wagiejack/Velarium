@@ -2,6 +2,7 @@ package main
 import "core:fmt"
 import "core:time"
 import "core:math"
+import "core:sort"
 import sdl "vendor:sdl2"
 
 log_types::enum{
@@ -9,7 +10,11 @@ log_types::enum{
     WARN,
     ERROR
 }
-RED:u32=0xFF0000FF
+RED:u32=0xFFFF0000
+YELLOW:u32=0xFFFFFF00
+PURPLE_GRAY:u32=0xFF3C2F47
+template_color:u32=0xFF000000
+current_color:u32=0x00FF00FF
 WINDOW_WIDTH :: 800
 WINDOW_HEIGHT :: 600
 is_drawing:bool =false
@@ -24,9 +29,7 @@ initial_triangle_point:vec2_t = vec2_t{-1,-1}
 is_drawing_line_shape:bool=false
 initial_line_shape_point:vec2_t = vec2_t{-1,-1}
 is_x_pressed:bool= false
-template_color:u32=0xFF000000
-
-
+is_deleting_area:bool = false
 reset_shape_point::proc(shape:^vec2_t){
     shape.x,shape.y = -1,-1
 }
@@ -36,15 +39,15 @@ distance_between_points::proc(p1:vec2_t,p2:vec2_t)->(distance:f32){
     return math.sqrt(dx*dx + dy*dy)
 }
 draw_ellipse :: proc(center_x, center_y, radius_x, radius_y: f32, color: u32) {
-    rx := i32(radius_x)
-    ry := i32(radius_y)
-    cx := i32(center_x)
-    cy := i32(center_y)
+    rx := f32(radius_x)
+    ry := f32(radius_y)
+    cx := f32(center_x)
+    cy := f32(center_y)
 
-    x :i32= 0
-    y :i32= ry
-    dx :i32= 0
-    dy :i32= 2 * rx * rx * y
+    x :f32= 0
+    y :f32= ry
+    dx :f32= 0
+    dy :f32= 2 * rx * rx * y
     err := ry * ry - rx * rx * ry
     for rx * rx * y >= ry * ry * x {
         draw_fat_pixel(cx + x, cy + y, color)
@@ -85,25 +88,27 @@ draw_ellipse :: proc(center_x, center_y, radius_x, radius_y: f32, color: u32) {
     }
 }
 draw_triangle :: proc(p1, p2, p3: vec2_t, color: u32) {
-    draw_line(i32(p1.x), i32(p1.y), i32(p2.x), i32(p2.y), color)
-    draw_line(i32(p2.x), i32(p2.y), i32(p3.x), i32(p3.y), color)
-    draw_line(i32(p3.x), i32(p3.y), i32(p1.x), i32(p1.y), color)
+    draw_line(p1.x, p1.y, p2.x, p2.y, color)
+    draw_line(p2.x, p2.y, p3.x, p3.y, color)
+    draw_line(p3.x, p3.y, p1.x, p1.y, color)
+
 }
 draw_circle :: proc(center: vec2_t, radius: f32, color: u32) {//copied from llm
-    x := i32(radius)
-    y : i32 = 0
-    p : i32 = 1 - i32(radius) // Initial decision parameter
+    x := f32(radius)
+    y : f32 = 0
+    p : f32 = 1 - f32(radius) // Initial decision parameter
     // Draw the circle using symmetry
     for x >= y {
         // Plot points in all octants
-        draw_fat_pixel(i32(center.x) + x, i32(center.y) + y, color)
-        draw_fat_pixel(i32(center.x) + y, i32(center.y) + x, color)
-        draw_fat_pixel(i32(center.x) - y, i32(center.y) + x, color)
-        draw_fat_pixel(i32(center.x) - x, i32(center.y) + y, color)
-        draw_fat_pixel(i32(center.x) - x, i32(center.y) - y, color)
-        draw_fat_pixel(i32(center.x) - y, i32(center.y) - x, color)
-        draw_fat_pixel(i32(center.x) + y, i32(center.y) - x, color)
-        draw_fat_pixel(i32(center.x) + x, i32(center.y) - y, color)
+        draw_fat_pixel(center.x + x, center.y + y, color)
+        draw_fat_pixel(center.x + y, center.y + x, color)
+        draw_fat_pixel(center.x - y, center.y + x, color)
+        draw_fat_pixel(center.x - x, center.y + y, color)
+        draw_fat_pixel(center.x - x, center.y - y, color)
+        draw_fat_pixel(center.x - y, center.y - x, color)
+        draw_fat_pixel(center.x + y, center.y - x, color)
+        draw_fat_pixel(center.x + x, center.y - y, color)
+
         y += 1
         // Update decision parameter
         if p <= 0 {
@@ -145,8 +150,14 @@ pixel_data::struct{
     y:f32,
     color:u32
 }
+Lasso_Boundary_Point::struct{
+    least_x:f32,
+    least_y:f32,
+    most_x:f32,
+    most_y:f32
+}
 reset_pixel_to_default_template::proc(pixel:^pixel_data){
-    draw_pixel(i32(pixel.x),i32(pixel.y),template_color)
+    draw_pixel(pixel.x,pixel.y,template_color)
 }
 id_of_current_line:u128=0
 Line_Data::struct{
@@ -161,7 +172,8 @@ rectangle_shape_data::struct{
 }
 circle_shape_data::struct{
     initialization_point:vec2_t,
-    final_point:vec2_t
+    final_point:vec2_t,
+    color:u32
 }
 ellipse_shape_data::struct{
     initialization_point:vec2_t,
@@ -180,6 +192,11 @@ Fill_Data::struct{
     color_to_be_replaced_with:u32,
     color_to_be_replaced:u32
 }
+Lasso_Data::struct{
+    center:vec2_t,
+    radius:f32,
+    fill_color:u32
+}
 Drawing_Type::enum{
     LINE,
     FILL,
@@ -187,7 +204,8 @@ Drawing_Type::enum{
     CIRCLE_SHAPE,
     ELLIPSE_SHAPE,
     TRIANGLE_SHAPE,
-    LINE_SHAPE
+    LINE_SHAPE,
+    LASSO
 }
 Line::struct{
     data:union{
@@ -197,7 +215,8 @@ Line::struct{
         circle_shape_data,
         ellipse_shape_data,
         triangle_shape_data,
-        line_shape_data
+        line_shape_data,
+        Lasso_Data
     },
     drawing_type:Drawing_Type,
     line_id:u128
@@ -247,7 +266,7 @@ draw_line_from_stack::proc(stack:^Stack(Line)){
                 thickness:=line_data.thickness
                 x_start,y_start:=line_data.line_start.x,line_data.line_start.y
                 x_end,y_end:=line_data.line_end.x,line_data.line_end.y
-                draw_line(i32(x_start),i32(y_start),i32(x_end),i32(y_end),color)
+                draw_line(x_start,y_start,x_end,y_end,color)
             }
             case .FILL:{
                 fill_data:=d.data.(Fill_Data)
@@ -255,6 +274,13 @@ draw_line_from_stack::proc(stack:^Stack(Line)){
                 existing_color_that_will_be_replaced:=fill_data.color_to_be_replaced
                 x,y:=fill_data.initialization_point.x,fill_data.initialization_point.y
                 fill_area(x,y,fill_color,existing_color_that_will_be_replaced)
+            }
+            case .LASSO:{
+                lasso_data:=d.data.(Lasso_Data)
+                fill_color:=lasso_data.fill_color
+                radius:=lasso_data.radius
+                c_x,c_y:=lasso_data.center.x,lasso_data.center.y
+                fill_circle_area(c_x,c_y,radius,fill_color)
             }
             case .RECTANGLE_SHAPE:{
                 data:= d.data.(rectangle_shape_data)
@@ -270,20 +296,21 @@ draw_line_from_stack::proc(stack:^Stack(Line)){
                 final:=vec2_t{x_final,y_final}
                 pp1:=vec2_t{predicted_point_1_x,predicted_point_1_y}
                 pp2:=vec2_t{predicted_point_2_x,predicted_point_2_y}
-                color:u32=0x00FF00FF
-                draw_line(i32(initial.x),i32(initial.y),i32(pp1.x),i32(pp1.y),color)
-                draw_line(i32(initial.x),i32(initial.y),i32(pp2.x),i32(pp2.y),color)
-                draw_line(i32(final.x),i32(final.y),i32(pp1.x),i32(pp1.y),color)
-                draw_line(i32(final.x),i32(final.y),i32(pp2.x),i32(pp2.y),color)
+                color:u32=current_color
+                draw_line(initial.x, initial.y, pp1.x, pp1.y, color)
+                draw_line(initial.x, initial.y, pp2.x, pp2.y, color)
+                draw_line(final.x, final.y, pp1.x, pp1.y, color)
+                draw_line(final.x, final.y, pp2.x, pp2.y, color)
+
             }
             case .CIRCLE_SHAPE:{
                 data:=d.data.(circle_shape_data)
+                color:=data.color
                 initial:=vec2_t{data.initialization_point.x,data.initialization_point.y}
                 final:=vec2_t{data.final_point.x,data.final_point.y}
                 diameter:=distance_between_points(initial,final)
                 radius:=diameter/2
                 center:=vec2_t{(initial.x+final.x)/2,(initial.y+final.y)/2}
-                color: u32 = 0x00FF00FF
                 draw_circle(center,radius,color)
             }
             case .ELLIPSE_SHAPE:{
@@ -293,7 +320,7 @@ draw_line_from_stack::proc(stack:^Stack(Line)){
                 radius_x:=distance_between_points(initial,vec2_t{final.x,initial.y})/2 //Horizontal radius
                 radius_y:=distance_between_points(initial,vec2_t{initial.x,final.y})/2 //Vertical radius
                 center:=vec2_t{(initial.x+final.x)/2,(initial.y+final.y)/2}
-                color: u32 = 0x00FF00FF
+                color: u32 = current_color
             
                 min_radius: f32 = 5 // Minimum radius
                 if radius_x < min_radius {
@@ -308,7 +335,7 @@ draw_line_from_stack::proc(stack:^Stack(Line)){
                 data:=d.data.(triangle_shape_data)
                 p1:=vec2_t{data.initialization_point.x,data.initialization_point.y}
                 p_mid:=vec2_t{data.final_point.x,data.final_point.y}
-                color: u32 = 0x00FF00FF
+                color: u32 = current_color
             
                 height := math.abs(p1.y - p_mid.y)
                 base_half_width := height
@@ -322,8 +349,8 @@ draw_line_from_stack::proc(stack:^Stack(Line)){
                 data:=d.data.(line_shape_data)
                 initial:=vec2_t{data.initialization_point.x,data.initialization_point.y}
                 final:=vec2_t{data.final_point.x,data.final_point.y}
-                color: u32 = 0x00FF00FF
-                draw_line(i32(initial.x),i32(initial.y),i32(final.x),i32(final.y),color)
+                color: u32 = current_color
+                draw_line(initial.x,initial.y,final.x,final.y,color)
             }
         }
     }
@@ -383,10 +410,43 @@ perform_empty_check_and_swap_lines_among_stacks::proc(to:^Stack(Line),from:^Stac
         swap_stack_elements_with_same_line_ids(to,from,line_id_to_be_removed)
     }
 }
+fill_circle_area :: proc(center_x: f32, center_y: f32, radius: f32, fill_color: u32) {
+    // Calculate the bounding box of the circle
+    min_x := i32(center_x - radius)
+    min_y := i32(center_y - radius)
+    max_x := i32(center_x + radius)
+    max_y := i32(center_y + radius)
+
+    // Clamp to window boundaries
+    min_x = max(0, min_x)
+    min_y = max(0, min_y)
+    max_x = min(i32(WINDOW_WIDTH - 1), max_x)
+    max_y = min(i32(WINDOW_HEIGHT - 1), max_y)
+
+    // Square of the radius for distance comparison
+    radius_squared := radius * radius
+
+    // Fill all pixels within the circle
+    for y := min_y; y <= max_y; y += 1 {
+        for x := min_x; x <= max_x; x += 1 {
+            // Calculate distance from center using distance formula
+            dx := f32(x) - center_x
+            dy := f32(y) - center_y
+            distance_squared := dx * dx + dy * dy
+
+            // If point is inside circle, fill it
+            if distance_squared <= radius_squared {
+                draw_pixel(f32(x), f32(y), fill_color)
+            }
+        }
+    }
+}
 fill_area :: proc(start_x: f32, start_y: f32, new_color: u32, target_color: u32) {
     if start_x < 0 || start_y < 0 || start_x >= WINDOW_WIDTH || start_y >= WINDOW_HEIGHT {
         return
     }
+    log_info("Filling on the point",start_x,start_y)
+    log_info("Filling, new color is",new_color==RED?"RED":"new_color",target_color==PURPLE_GRAY?"PURPLE_GRAY":"Fag")
     points_to_process := make([dynamic]vec2_t)
     defer delete(points_to_process)
     append(&points_to_process, vec2_t{start_x, start_y})
@@ -402,7 +462,7 @@ fill_area :: proc(start_x: f32, start_y: f32, new_color: u32, target_color: u32)
             continue
         }
         // Fill current pixel
-        draw_pixel(i32(x), i32(y), new_color)
+        draw_pixel(x, y, new_color)
 
         // Add neighboring pixels to stack
         append(&points_to_process, vec2_t{x + 1, y}) // right
@@ -411,7 +471,6 @@ fill_area :: proc(start_x: f32, start_y: f32, new_color: u32, target_color: u32)
         append(&points_to_process, vec2_t{x, y - 1}) // up
     }
 }
-
 check_input :: proc(){
     log_info("Checking the input")
     event: sdl.Event
@@ -464,7 +523,7 @@ check_input :: proc(){
                         x, y: i32
                         sdl.GetMouseState(&x, &y)
                         current_mouse_pos := vec2_t{f32(x), f32(y)}
-                        new_fill_color:u32 = 0xFFFF0000
+                        new_fill_color:u32 = RED
                         existing_color:u32 = drawing_buffer[WINDOW_WIDTH * int(current_mouse_pos.y) + int(current_mouse_pos.x)] //We will be replacing pixel color that the mouse is at
                         //putting this point in the Line stack
                         stack_push(&Line_Stack,
@@ -517,6 +576,19 @@ check_input :: proc(){
                             continue
                         }
                     }
+                    case .X:{
+                        //x denotes lasso delete
+                        is_x_pressed=true
+                        if is_d_pressed && !is_deleting_area{
+                            x, y: i32
+                            sdl.GetMouseState(&x, &y)
+                            current_mouse_pos := vec2_t{f32(x), f32(y)}
+                            is_deleting_area = true
+                            initial_circle_point = vec2_t{current_mouse_pos.x,current_mouse_pos.y}
+                            id_of_current_line+=1
+                            continue
+                        }
+                    }
                 }
             case .KEYUP:
                 key_event := cast(^sdl.KeyboardEvent)&event
@@ -564,10 +636,77 @@ check_input :: proc(){
                             reset_shape_point(&initial_ellipse_point)
                             id_of_current_line+=1
                         }
+                    case .X:
+                        is_x_pressed = false
+                        if is_deleting_area {
+                            // When taking up x, the last item in stack will be a circle
+                            // We will take it up, calculate its mid-point and perform fill-area 
+                            // with template color to mimic lasso
+                            top_value, ok := stack_peek(&Line_Stack)
+                            last_circle_data := top_value.data.(circle_shape_data)
+                            ip := last_circle_data.initialization_point
+                            fp := last_circle_data.final_point
+                            
+                            if ok && top_value.drawing_type == Drawing_Type.CIRCLE_SHAPE && 
+                                top_value.line_id == id_of_current_line {
+                                center := vec2_t{(ip.x + fp.x)/2, (ip.y + fp.y)/2}
+                                radius := distance_between_points(ip, fp) / 2
+                                stack_push(&Line_Stack,
+                                    Line{
+                                        Lasso_Data{
+                                            center = center,
+                                            radius = radius,
+                                            fill_color = template_color
+                                        },
+                                        Drawing_Type.LASSO,
+                                        id_of_current_line
+                                    }
+                                )
+                            }
+                            
+                            // Restoring the circle to template color
+                            stack_push(&Line_Stack,
+                                Line{
+                                    circle_shape_data{
+                                        initialization_point = vec2_t{ip.x, ip.y},
+                                        final_point = vec2_t{fp.x, fp.y},
+                                        color = template_color
+                                    },
+                                    Drawing_Type.CIRCLE_SHAPE,
+                                    id_of_current_line
+                                }
+                            )
+                            
+                            is_deleting_area = false
+                            reset_shape_point(&initial_circle_point)
+                            id_of_current_line += 1
+                        }
                 }
             case .MOUSEMOTION:
                 mouse_event := cast(^sdl.MouseMotionEvent)&event
                 current_mouse_pos := vec2_t{f32(mouse_event.x), f32(mouse_event.y)}
+                if is_d_pressed && is_deleting_area{
+                    //copying algo from circle
+                    for{
+                        top_value,ok:=stack_peek(&Line_Stack)
+                        if ok && top_value.drawing_type==Drawing_Type.CIRCLE_SHAPE && top_value.line_id==id_of_current_line{
+                            stack_pop(&Line_Stack)
+                        }else{
+                            break
+                        }
+                    }
+                    stack_push(&Line_Stack,Line{
+                        circle_shape_data{
+                            initialization_point = vec2_t{initial_circle_point.x,initial_circle_point.y},
+                            final_point = vec2_t{current_mouse_pos.x,current_mouse_pos.y},
+                            color= PURPLE_GRAY
+                        },
+                        Drawing_Type.CIRCLE_SHAPE,
+                        id_of_current_line
+                    })
+                    prev_mouse_pos = current_mouse_pos
+                    continue
+                }
                 if is_d_pressed && is_drawing_circle{
                     //copying the algo from rectangle
                     for{
@@ -581,7 +720,8 @@ check_input :: proc(){
                     stack_push(&Line_Stack,Line{
                         circle_shape_data{
                             initialization_point = vec2_t{initial_circle_point.x,initial_circle_point.y},
-                            final_point = vec2_t{current_mouse_pos.x,current_mouse_pos.y}
+                            final_point = vec2_t{current_mouse_pos.x,current_mouse_pos.y},
+                            color = current_color
                         },
                         Drawing_Type.CIRCLE_SHAPE,
                         id_of_current_line
@@ -704,14 +844,14 @@ clear_color_buffer :: proc(color:u32){
 }
 
 //Bresenham's line algorithm for connecting two points
-draw_line :: proc(x0, y0, x1, y1: i32, color: u32) {
+draw_line :: proc(x0, y0, x1, y1: f32, color: u32) {
     x := x0
     y := y0
 
     dx := abs(x1 - x0)
     dy := abs(y1 - y0)
-    sx :i32= x0 < x1 ? 1 : -1
-    sy :i32= y0 < y1 ? 1 : -1
+    sx :f32= x0 < x1 ? 1 : -1
+    sy :f32= y0 < y1 ? 1 : -1
     err := dx - dy
 
     for {
@@ -770,7 +910,7 @@ clear_buffer :: proc(buffer: []u32, color: u32) {
     }
 }
 
-draw_fat_pixel :: proc(x:i32,y:i32,color:u32){
+draw_fat_pixel :: proc(x:f32,y:f32,color:u32){
     for y_index:=y;y_index<y+2;y_index+=1{
         for x_index:=x;x_index<x+2;x_index+=1{
             draw_pixel(x_index,y_index,color)
@@ -778,13 +918,13 @@ draw_fat_pixel :: proc(x:i32,y:i32,color:u32){
     }
 }
 
-draw_pixel :: proc(x: i32, y: i32, color: u32) {
+draw_pixel :: proc(x: f32, y: f32, color: u32) {
     if x >= 0 && x < WINDOW_WIDTH && y >= 0 && y < WINDOW_HEIGHT {
         drawing_buffer[WINDOW_WIDTH * int(y) + int(x)] = color
     }
 }
 
-draw_rect :: proc(x, y, width, height: i32, color: u32){
+draw_rect :: proc(x, y, width, height: f32, color: u32){
     for y_index:=y;y_index<y+height;y_index+=1{
         for x_index:=x;x_index<x+width;x_index+=1{
             draw_pixel(x_index,y_index,color)
@@ -842,7 +982,7 @@ initialize_window :: proc() -> bool{
         return false
     }
     //initializing window
-    window = sdl.CreateWindow("Test Application",sdl.WINDOWPOS_CENTERED,sdl.WINDOWPOS_CENTERED,WINDOW_WIDTH,WINDOW_HEIGHT,sdl.WINDOW_BORDERLESS)
+    window = sdl.CreateWindow("ODIN PAINT",sdl.WINDOWPOS_CENTERED,sdl.WINDOWPOS_CENTERED,WINDOW_WIDTH,WINDOW_HEIGHT,sdl.WINDOW_BORDERLESS)
     if window==nil{
         log_error("Error creating SDL window")
         return false
