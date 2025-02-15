@@ -1,11 +1,18 @@
 # Velarium
 Name was straight up takes up from Claude with the prompt "Cool canvas names possibly from old times", 
 
-Anyhow, this was made a side project after 3-modules into [Pikuma's 3-d Graphics Programming course](https://pikuma.com/courses/learn-3d-computer-graphics-programming), 
+Anyhow, this was made a **side project** after 3-modules into [Pikuma's 3-d Graphics Programming course](https://pikuma.com/courses/learn-3d-computer-graphics-programming), 
 
-I'd just gained the ability to render pixels onto screen and was bored with theory, which jump-started a 1 month journey into making a toy paint desktop application (ik ik, initializes at 800x600, linear paint colors so not really something a "cracked guy with high agency" would make)
+I'd just gained ability to render pixels onto screen and was bored with theory, which jump-started a month's journey into making a paint desktop application `(ik ik, initializes at 800x600, has single paint colors, so not really something a "cracked guy with high agency" would make)`
 
-Although the course was in C, i did this in Odin+SDL2 to complete the aim of learning Odin too.
+This how the pixel manipulation wizardry got me feelin' like though
+![wizard with claude](https://github.com/user-attachments/assets/da3f91f1-059e-42ba-8bd8-2bd40cd4d66d)
+
+Although the course was in C, i did this in Odin+SDL2 cover Odin exposure Side-Quest
+
+Here is a small demo
+
+![final_demo_opdin_app](https://github.com/user-attachments/assets/1d626141-b4be-404e-9630-f812705087c8)
 
 # Usage
 
