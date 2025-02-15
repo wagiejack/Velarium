@@ -982,7 +982,7 @@ initialize_window :: proc() -> bool{
         return false
     }
     //initializing window
-    window = sdl.CreateWindow("ODIN PAINT",sdl.WINDOWPOS_CENTERED,sdl.WINDOWPOS_CENTERED,WINDOW_WIDTH,WINDOW_HEIGHT,sdl.WINDOW_BORDERLESS)
+    window = sdl.CreateWindow("Velarium",sdl.WINDOWPOS_CENTERED,sdl.WINDOWPOS_CENTERED,WINDOW_WIDTH,WINDOW_HEIGHT,sdl.WINDOW_BORDERLESS)
     if window==nil{
         log_error("Error creating SDL window")
         return false
